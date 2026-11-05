@@ -47,8 +47,8 @@ module cpe (
 
     // ---- Register, latch, 8:1 mux / bridge ----
     parameter [1:0] C_CPE_CLK = 2'd0, C_CPE_EN = 2'd0, C_CPE_RES = 2'd0, C_CPE_SET = 2'd0;  // LUT1 truth tables
-    parameter [0:0] C_CLKSEL = 1'b0;    // add CINY2 to the clock (the 8:1 mux select adder adds CINY1)
-    parameter [0:0] C_ENSEL  = 1'b0;    // add PINY2 to the enable (the 8:1 mux select adder adds PINY1)
+    parameter [0:0] C_CLKSEL = 1'b0;    // add CINY2 to the clock (the 8:1 mux select adder adds it too, finding 37)
+    parameter [0:0] C_ENSEL  = 1'b0;    // add PINY2 to the enable (the 8:1 mux select adder adds it too, finding 37)
     parameter [0:0] C_EN_SR  = 1'b0;    // 1: SET LUT1 listens to SR, 0: to EN
     parameter [0:0] C_L_D    = 1'b0;    // 0: flip-flop, 1: latch
     parameter [0:0] C_BR     = 1'b0;    // 1: 8:1 mux select = C_SN (bridge); flop 2 takes MUXOUT
@@ -57,6 +57,12 @@ module cpe (
 
     // ---- Outputs ----
     parameter [1:0] C_O1 = 2'd0, C_O2 = 2'd0;       // 0 = register, 1 = MUXOUT, 2 = CPOUT, 3 = COMBOUT
+
+    // ---- Start state of the registers. The bitstream loader brings them there by pulsing the reset or set input
+    // ---- while it configures the CPE (libgm: FF_INIT, 2 bits per CPE in the last byte of the tile data), so the
+    // ---- hardware has no such bits. A model cannot change a parameter later, hence it is one here.
+    // ---- 2 = reset (Q = 0), 3 = set (Q = 1), 0 and 1 = not initialised: the start state of this model, Q = 1.
+    parameter [1:0] FF_INIT = 2'd0;
     parameter [0:0] C_RAM_I1 = 1'b0, C_RAM_I2 = 1'b0;     // NOTE: schematic: 0 selects RAM_I; nextpnr sets C_RAM_I=1 only when RAM_I is used
     parameter [0:0] C_RAM_O1 = 1'b0, C_RAM_O2 = 1'b0;
 
@@ -123,8 +129,7 @@ module cpe (
 
     // 4:1 multiplexers (MX4): per input  out = invert ^ (mode & select & data).
     // The invert and select bits are the INIT bits of L10 / L11 of the *other* half, one bit per input.
-    // NOTE: the schematic labels these blocks "C = L10, X = L11" (MX4a) and "C = L11, X = L10" (MX4b).
-    //       nextpnr (pack_cpe.cc, bitstream.cc) has it the other way round for MX4a, used here.
+    // NOTE: the schematic labels MX4a "C = L11, X = L10" and MX4b "C = L10, X = L11" (as nextpnr has it; hardware S3 / S7 confirms both).
     //       Hardware (M20): the upper mux (MX4a, data IN1..IN4, select l03/l02) feeds L20.D1 (level2_b),
     //       the other one (MX4b, data IN5..IN8, select l01/l00) feeds L20.D0 (level2_a = COMB2OUT).
     wire [3:0] mx4a_in   = {IN4, IN3, IN2, IN1};
@@ -147,9 +152,9 @@ module cpe (
     wire comb2_out       = level2_a ^ add2_carry;
 
     // Comparator
-    // NOTE: hardware (hw_measurements.md M12 / finding 20): COMP_OUT arrives inverted on COUTX (INIT_L30 = 0 gives 1). The inverter sits directly behind the LUT2, so
-    //       every user of COMP_OUT sees the inverted value (only COUTX is measured; the other lines are assumed to share the logic).
-    wire comp_out = ~lut2(INIT_L30, comb2_out, comb1_out);
+    // NOTE: COMP_OUT is the raw LUT output. The comparator conditions of the CP generators (POUTX, hw_measurements.md finding 30) see it as it is; the inversion measured on the
+    //       COUTX routing multiplexer (finding 20) sits in front of that multiplexer's data input D2 (written ~comp_out below, for all six routing multiplexers: assumed to be alike).
+    wire comp_out = lut2(INIT_L30, comb2_out, comb1_out);
 
     // Carry chain signals: propagate (CADD_S) and generate (CADD_A)
     wire propagate_addf  = ~(l10 ^ l11);
@@ -170,7 +175,8 @@ module cpe (
     //       (mult_sum_lo itself is not inverted: MULTO1 = mult_sum_lo ^ CINY2 matches).
     wire mult_carry_mid = mult_sum_lo ? CINY2 : pp_am1_b1;
     wire coy2_a         = mult_sum_hi ? pp_am1_b1 : pp_a0_b1;             // COY2_a
-    wire coy2_s         = mult_sum_hi | mult_sum_lo;                      // COY2_S
+    // NOTE: hardware (hw_measurements.md finding 36, wp_y2 / wp_y2b): the select that COUTY2 uses is NAND(mult_sum_hi, mult_sum_lo); the schematic has OR here.
+    wire coy2_s         = ~(mult_sum_hi & mult_sum_lo);                   // COY2_S
     wire multo1         = mult_sum_lo ^ CINY2;                            // MULTO1
     wire multo2         = mult_sum_hi ^ mult_carry_mid;                   // MULTO2
 
@@ -181,7 +187,8 @@ module cpe (
     wire ff_clk    = lut1(C_CPE_CLK, CLK) ^ (C_CLKSEL & CINY2);
     wire ff_en     = lut1(C_CPE_EN,  EN)  ^ (C_ENSEL  & PINY2);
     // NOTE: hardware (hw_measurements.md, finding 6): the reset / set request LUT1s are active low, word 11 = no request (what nextpnr writes for a plain
-    //       flip-flop), 00 = permanent request. The schematic has them active high, hence the inversion.
+    //       flip-flop), 00 = permanent request. The schematic's S / R pins of the flip-flop symbols are active low too (bubble), the LUT1 output goes in directly;
+    //       here the requests are modelled active high, hence the inversion.
     wire reset_req = ~lut1(C_CPE_RES, SR);
     wire set_req   = ~lut1(C_CPE_SET, C_EN_SR ? SR : EN);
 
@@ -189,12 +196,11 @@ module cpe (
     // 8:1 multiplexer (MUXOUT). Its select is a 3-bit adder:
     //   C_SN + {SR, EN, CLK terms} + C_2D_IN, or C_SN alone in bridge mode.
     // The terms are built like the register ones, with their own LUT1s and the same config bits.
-    // NOTE: as drawn, they read CINY1 / PINY1 (C_CLKSEL / C_ENSEL), the registers CINY2 / PINY2.
-    //       Commit 5a43fa5 ("fix C_CLKSEL/C_ENSEL input") relabelled only the register side.
-    //       Not tested on hardware; nextpnr's MX8 is derived from this schematic, so it is no reference.
+    // NOTE: hardware (hw_measurements.md, S31, finding 37): the terms read CINY2 / PINY2 (C_CLKSEL / C_ENSEL), the same lines as the registers, added by XOR.
+    //       The schematic still has CINY1 / PINY1 here (commit 5a43fa5 relabelled only the register side).
     // ------------------------------------------------------------------------------------
-    wire mux8_term_clk = lut1(C_CPE_CLK, CLK) ^ (C_CLKSEL & CINY1);
-    wire mux8_term_en  = lut1(C_CPE_EN,  EN)  ^ (C_ENSEL  & PINY1);
+    wire mux8_term_clk = lut1(C_CPE_CLK, CLK) ^ (C_CLKSEL & CINY2);
+    wire mux8_term_en  = lut1(C_CPE_EN,  EN)  ^ (C_ENSEL  & PINY2);
     wire mux8_term_sr  = lut1(C_CPE_RES, SR);
 
     wire [2:0] mux8_select_sum = C_SN + {mux8_term_sr, mux8_term_en, mux8_term_clk} + C_2D_IN;
@@ -224,10 +230,10 @@ module cpe (
     reg latch2_stored;
 
     initial begin
-        ff1_stored    = 1'b0;
-        ff2_stored    = 1'b0;
-        latch1_stored = 1'b0;
-        latch2_stored = 1'b0;
+        ff1_stored    = (FF_INIT == 2'd2);       // stores the inverse: FF_INIT = 2 starts with Q = 0
+        ff2_stored    = (FF_INIT == 2'd2);
+        latch1_stored = (FF_INIT == 2'd2);
+        latch2_stored = (FF_INIT == 2'd2);
     end
 
     always @(posedge ff_clk or posedge reset_req or posedge set_req) begin
@@ -306,7 +312,7 @@ module cpe (
         case ({C_SEL_C, C_SELX})
             2'b00: cx_route = OUT1;
             2'b01: cx_route = OUT2;
-            2'b10: cx_route = comp_out;                  // inverted already behind the LUT2
+            2'b10: cx_route = ~comp_out;                 // inverter in front of D2 (measured on COUTX)
             default: cx_route = cin_y12;
         endcase
     end
@@ -315,7 +321,7 @@ module cpe (
         case ({C_SEL_C, C_SELY1})
             2'b00: cy1_route = OUT2;
             2'b01: cy1_route = OUT1;
-            2'b10: cy1_route = comp_out;
+            2'b10: cy1_route = ~comp_out;                 // inverter in front of D2 (assumed like COUTX)
             default: cy1_route = CINX;
         endcase
     end
@@ -324,7 +330,7 @@ module cpe (
         case ({C_SEL_C, C_SELY2})
             2'b00: cy2_route = OUT1;
             2'b01: cy2_route = OUT2;
-            2'b10: cy2_route = comp_out;
+            2'b10: cy2_route = ~comp_out;                 // inverter in front of D2 (assumed like COUTX)
             default: cy2_route = CINX;
         endcase
     end
@@ -333,7 +339,7 @@ module cpe (
         case ({C_SEL_P, C_SELX})
             2'b00: px_route = OUT2;
             2'b01: px_route = OUT1;
-            2'b10: px_route = comp_out;
+            2'b10: px_route = ~comp_out;                 // inverter in front of D2 (assumed like COUTX)
             default: px_route = pin_y12;
         endcase
     end
@@ -342,7 +348,7 @@ module cpe (
         case ({C_SEL_P, C_SELY1})
             2'b00: py1_route = OUT1;
             2'b01: py1_route = OUT2;
-            2'b10: py1_route = comp_out;
+            2'b10: py1_route = ~comp_out;                 // inverter in front of D2 (assumed like COUTX)
             default: py1_route = PINX;
         endcase
     end
@@ -351,41 +357,41 @@ module cpe (
         case ({C_SEL_P, C_SELY2})
             2'b00: py2_route = OUT2;
             2'b01: py2_route = OUT1;
-            2'b10: py2_route = comp_out;
+            2'b10: py2_route = ~comp_out;                 // inverter in front of D2 (assumed like COUTX)
             default: py2_route = PINX;
         endcase
     end
 
     // ---- COUTX / POUTX: 4:1 final multiplexers ----
-    // C_CX_I / C_PX_I = 1 takes the routing multiplexer. Otherwise the adder (carry chain)
-    // or comparator decides: chain through CINX / PINX, or start a new carry.
-    // NOTE: measured on hardware (hw_measurements.md M10, M11), same form as COUTY1 with C_HORIZ instead of ~C_HORIZ:
-    //       chain = ~C_CX_I & (~(C_ADDF & C_HORIZ) | P) with the true propagate P = ~carry_propagate. The schematic has
-    //       (carry_propagate | (C_ADDF & C_HORIZ)) & ~C_CX_I, which gives different results (e.g. C_FUNCTION=1, C_HORIZ=1).
-    wire coutx_chain = ~(C_CX_I | ((C_ADDF & C_HORIZ) & carry_propagate));    // 1: pass CINX (or MULTO2), 0: generate / route
-    wire coutx_alt   = C_MULT | C_CX_I;
+    // The selects are never inverted in front of the multiplexer: S1 is the OA21 / AO21-type output as it is, the data inputs are arranged accordingly.
+    // COUTX (hw_measurements.md findings 20-24, 27): S1 = C_CX_I | ((C_ADDF & C_HORIZ) & carry_propagate), S0 = C_MULT | C_CX_I,
+    //   {S1, S0}: 00 CINX, 01 MULTO2, 10 generate, 11 routing multiplexer. (The schematic has an OR / AND-with-~C_CX_I here: not what the hardware does.)
+    wire coutx_s1 = C_CX_I | ((C_ADDF & C_HORIZ) & carry_propagate);
+    wire coutx_s0 = C_MULT | C_CX_I;
     reg  coutx_value;
 
-    always @(coutx_chain or coutx_alt or carry_generate or cx_route or CINX or multo2) begin
-        case ({coutx_chain, coutx_alt})
-            2'b00: coutx_value = carry_generate;
-            2'b01: coutx_value = cx_route;
-            2'b10: coutx_value = CINX;
-            default: coutx_value = multo2;
+    always @(coutx_s1 or coutx_s0 or carry_generate or cx_route or CINX or multo2) begin
+        case ({coutx_s1, coutx_s0})
+            2'b00: coutx_value = CINX;
+            2'b01: coutx_value = multo2;
+            2'b10: coutx_value = carry_generate;
+            default: coutx_value = cx_route;
         endcase
     end
     assign COUTX = coutx_value;
 
-    wire poutx_chain = (comp_out | (C_COMP & C_HORIZ)) & ~C_PX_I;           // pass PINX
-    wire poutx_alt   = C_MULT | C_PX_I;
+    // POUTX (hw_measurements.md finding 30), same structure with the comparator in place of the adder: S1 = C_PX_I | ((C_COMP & C_HORIZ) & comp_out), S0 = C_MULT | C_PX_I,
+    //   {S1, S0}: 00 PINX, 01 MULTO1, 10 ~C_COMP_I, 11 routing multiplexer.
+    wire poutx_s1 = C_PX_I | ((C_COMP & C_HORIZ) & comp_out);
+    wire poutx_s0 = C_MULT | C_PX_I;
     reg  poutx_value;
 
-    always @(poutx_chain or poutx_alt or px_route or PINX or multo1) begin
-        case ({poutx_chain, poutx_alt})
-            2'b00: poutx_value = C_COMP_I;
-            2'b01: poutx_value = px_route;
-            2'b10: poutx_value = PINX;
-            default: poutx_value = multo1;
+    always @(poutx_s1 or poutx_s0 or px_route or PINX or multo1 or C_COMP_I) begin
+        case ({poutx_s1, poutx_s0})
+            2'b00: poutx_value = PINX;
+            2'b01: poutx_value = multo1;
+            2'b10: poutx_value = ~C_COMP_I;
+            default: poutx_value = px_route;
         endcase
     end
     assign POUTX = poutx_value;
@@ -396,23 +402,24 @@ module cpe (
     //       Without an adder C_CY1_I = 0 passes CINY1 (as die.py has it). C_HORIZ = 1 was measured too (COUTY1 = CINY1 | (A & B)
     //       with B on CINX) and is not reproduced: it is modelled like a non-adder here.
     wire cy1_adder   = C_ADDF & ~C_HORIZ;
-    wire cy1_through = ~(C_CY1_I | (cy1_adder & carry_propagate));
-    assign COUTY1 = cy1_through ? CINY1 : (cy1_adder ? carry_generate : cy1_route);
+    wire cy1_sel     = C_CY1_I | (cy1_adder & carry_propagate);        // 0: pass CINY1 (the select takes the OA21 output as it is)
+    assign COUTY1 = cy1_sel ? (cy1_adder ? carry_generate : cy1_route) : CINY1;
 
+    // NOTE: POUTY1 follows POUTX (hw_measurements.md finding 30) and COUTY1 by parallel: only "C_PY1_I = 1 takes the routing multiplexer, 0 passes PINY1" is measured (finding 10);
+    //       the comparator terms (C_COMP & ~C_HORIZ, raw comp_out, ~C_COMP_I) are assumed. The schematic had (comp_out | compare) & C_PY1_I -> PINY1 here.
     wire py1_compare = C_COMP & ~C_HORIZ;
-    wire py1_through = (comp_out | py1_compare) & C_PY1_I;
-    assign POUTY1 = py1_through ? PINY1 : (py1_compare ? C_COMP_I : py1_route);
+    wire py1_sel     = C_PY1_I | (py1_compare & comp_out);                // 0: pass PINY1
+    assign POUTY1 = py1_sel ? (py1_compare ? ~C_COMP_I : py1_route) : PINY1;
 
     // ---- COUTY2 / POUTY2 ----
-    // NOTE: measured on hardware (M21, M22, hw_test_plan.md Phase 0 V0.3/V0.4): C_CY2_I = 0 passes CINY2, C_CY2_I = 1 gives
-    //       cy2_route, like COUTY1's C_CY1_I. The schematic has the pass-through at (coy2_s | C_MULT) & C_CY2_I; the roles of
-    //       coy2_s and C_MULT are still unmeasured (CY2.2 / PY2.1).
-    wire cy2_through = ~C_CY2_I;
-    assign COUTY2 = cy2_through ? CINY2 : (C_MULT ? coy2_a : cy2_route);
+    // COUTY2 (hw_measurements.md findings 35, 36; the south helper's COUTY2 read at the DUT): C_CY2_I = 0 passes CINY2, C_CY2_I = 1 gives the routing multiplexer, like COUTY1; in multiplier mode
+    //   (C_MULT = 1) the generate-type term coy2_a replaces the route and CINY2 is passed only where mult_sum_hi & mult_sum_lo (independent of the comparator, checked with six INIT_L30 values):
+    //   select = C_CY2_I | (C_MULT & coy2_s).  coy2_a itself was only seen as constant 0 (IN5 = IN8 = 0 on the helper): unvalidated.
+    wire cy2_sel = C_CY2_I | (C_MULT & coy2_s);                           // 0: pass CINY2
+    assign COUTY2 = cy2_sel ? (C_MULT ? coy2_a : cy2_route) : CINY2;
 
-    // NOTE: measured on hardware (M23, Phase 0 V0.5): with C_PY2_I = 1, C_MULT = 0, POUTY2 gives py2_route, not PINY2 as the
-    //       schematic has it; the C_MULT term is unmeasured (PY2.1).
-    wire py2_through = ~(C_PY2_I | C_MULT);
-    assign POUTY2 = py2_through ? PINY2 : py2_route;
+    // POUTY2 (finding 35): C_PY2_I = 1 takes the routing multiplexer, 0 passes PINY2; in multiplier mode (C_MULT = 1) PINY2 is always passed (B operand forwarded), also at C_PY2_I = 1.
+    wire py2_sel = C_PY2_I & ~C_MULT;
+    assign POUTY2 = py2_sel ? py2_route : PINY2;
 
 endmodule
