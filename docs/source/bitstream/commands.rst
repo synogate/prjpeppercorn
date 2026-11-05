@@ -64,7 +64,23 @@ After location is set with one of previous commands, it is required to set a dat
 
 For configuring logic and IO tiles data payload is 112 bytes max. Payload can be smaller, but programming
 will act as it is zero padded till full size.
-This command is also used to configure RAM blocks, there we expect 27 bytes of payload maximum. 
+This command is also used to configure RAM blocks, there we expect 27 bytes of payload maximum.
+
+.. note::
+    The statement that a shorter payload acts as zero padded is most likely not accurate for the bytes
+    that are not transmitted. Bitstreams written by the vendor tools (and the way this library writes and reads them)
+    only make sense if a short payload updates just the transmitted bytes, starting at offset 0, and leaves
+    the rest of the tile unchanged:
+
+    - A logic tile is written up to three times (see *iterations* in ``Bitstream.cpp``). The first pass
+      carries routing (InMux, OutMux, switch boxes) with the CPE bytes (0..39) zeroed. The second and third pass
+      carry only the CPE bytes (40 bytes at most, trailing zeros trimmed). If these shorter payloads zeroed
+      bytes 40..111, they would erase the routing written by the first pass.
+    - Trailing zero bytes are removed from every payload. That is only lossless for the first pass of a fresh tile,
+      so for later passes it relies on untransmitted bytes being kept.
+
+    Zero padding may only apply to a tile that has not been written before. This has been derived from the
+    bitstream structure and not verified on hardware.
 
 CMD_RXRYS
 ----------
