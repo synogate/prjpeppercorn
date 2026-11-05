@@ -57,6 +57,12 @@ module cpe (
 
     // ---- Outputs ----
     parameter [1:0] C_O1 = 2'd0, C_O2 = 2'd0;       // 0 = register, 1 = MUXOUT, 2 = CPOUT, 3 = COMBOUT
+
+    // ---- Start state of the registers. The bitstream loader brings them there by pulsing the reset or set input
+    // ---- while it configures the CPE (libgm: FF_INIT, 2 bits per CPE in the last byte of the tile data), so the
+    // ---- hardware has no such bits. A model cannot change a parameter later, hence it is one here.
+    // ---- 2 = reset (Q = 0), 3 = set (Q = 1), 0 and 1 = not initialised: the start state of this model, Q = 1.
+    parameter [1:0] FF_INIT = 2'd0;
     parameter [0:0] C_RAM_I1 = 1'b0, C_RAM_I2 = 1'b0;     // NOTE: schematic: 0 selects RAM_I; nextpnr sets C_RAM_I=1 only when RAM_I is used
     parameter [0:0] C_RAM_O1 = 1'b0, C_RAM_O2 = 1'b0;
 
@@ -224,10 +230,10 @@ module cpe (
     reg latch2_stored;
 
     initial begin
-        ff1_stored    = 1'b0;
-        ff2_stored    = 1'b0;
-        latch1_stored = 1'b0;
-        latch2_stored = 1'b0;
+        ff1_stored    = (FF_INIT == 2'd2);       // stores the inverse: FF_INIT = 2 starts with Q = 0
+        ff2_stored    = (FF_INIT == 2'd2);
+        latch1_stored = (FF_INIT == 2'd2);
+        latch2_stored = (FF_INIT == 2'd2);
     end
 
     always @(posedge ff_clk or posedge reset_req or posedge set_req) begin
