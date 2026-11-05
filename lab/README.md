@@ -52,3 +52,4 @@ CLI: `python capture_uart.py [baud] [s/div]` (Single-Shot, dekodiert TX und RX).
 ## Testdesigns
 - `uart_hello/` - sendet `Hello GM#n\r\n` @115200 8N1 auf UART0_TX (Verilog, offener Flow), Pause ca. 50 ms. Idle-High am Scope ca. 2.7 V. Dekodierung verifiziert.
 - `const_high/` - TX konstant 1/0 (zum Prüfen des Pin-Pegels).
+- `cpe_rig/` - Harness für CPE-Validierung (Patch-Rig mit Baseline-Design, Messreihen und Rohdaten, `rig.py`, Anleitung in `cpe_rig/README.md`). Arbeitet in einem Ordner außerhalb von `lab/`.

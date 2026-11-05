@@ -13,8 +13,11 @@ Details/Hintergrund: `README.md` in diesem Ordner. Hier steht nur, **wie du vorg
 ## `lab/` ist für Experimente schreibgeschützt
 Experimente ändern den Ordner `lab/` **nicht**. Alles, was ein Experiment erzeugt, liegt in einem **Arbeitsordner außerhalb von `lab/`** (z. B. im Scratchpad der Session oder `$TEMP/lab_<name>`):
 - Testdesigns, Build-Ausgaben (`synth.json`, `pnr.json`, `bitfile.*`, Logs), Skripte, Screenshots, Messdaten und Zwischenergebnisse.
-- In `lab/` nichts anlegen, ändern oder löschen: keine neuen Ordner/Dateien, keine Änderungen an `scope.py`, `capture_uart.py`, `README.md`, `lab.md`, `uart_hello/`, `const_high/`.
+- In `lab/` nichts anlegen, ändern oder löschen: keine neuen Ordner/Dateien, keine Änderungen an `scope.py`, `capture_uart.py`, `README.md`, `lab.md`, `uart_hello/`, `const_high/`, `cpe_rig/`.
 - Python, das `scope` importiert, erzeugt sonst `lab/__pycache__`: `PYTHONDONTWRITEBYTECODE=1` setzen oder `sys.dont_write_bytecode = True` **vor** dem Import.
+- **CPE-Validierung:** Dafür gibt es den fertigen Harness `lab/cpe_rig/` (Patch-Rig, Baseline-Design, Messreihen, Rohdaten, Anleitung in `cpe_rig/README.md`). Er schreibt nur in einen
+  Arbeitsordner außerhalb von `lab/` (`CPE_RIG_WORK`, Standard `%TEMP%\cpe_rig_work`) und wird vor neuen CPE-Messungen als Erstes gelesen und benutzt. Neue Reihen schreibt man im Arbeitsordner
+  (Vorlage: `cpe_rig/experiments/`); in den Harness kommt nur etwas auf ausdrücklichen Wunsch des Nutzers.
 - Erkenntnisse aus Experimenten im Chat berichten. `README.md`/`lab.md` nur ändern, wenn der Nutzer es ausdrücklich verlangt (ebenso Änderungen an `scope.py` und den Referenzdesigns).
 
 ## Standard-Ablauf
